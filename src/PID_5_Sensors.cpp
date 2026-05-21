@@ -2,6 +2,12 @@
 
 PID_5_Sensors::PID_5_Sensors()
 {
+    // Default geometry (e.g. 14mm pitch curved array)
+    // Can be overridden via setSensorGeometry()
+    const float defaultX[NB_SENSORS] = { -28.0f, -14.0f,  0.0f, 14.0f, 28.0f };
+    const float defaultY[NB_SENSORS] = {  10.0f,   5.0f,  0.0f,  5.0f, 10.0f };
+    setSensorGeometry(defaultX, defaultY);
+
     for (int i = 0; i < NB_SENSORS; i++) {
         threshold[i]       = 1.65f;
         thresholdGround[i] = 3.3f;
@@ -9,9 +15,17 @@ PID_5_Sensors::PID_5_Sensors()
     resetPID();
 }
 
-// ─────────────────────────────────────────────────────────
-//  CALIBRATION
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
+//  CONFIGURATION & CALIBRATION
+// ---------------------------------------------------------
+
+void PID_5_Sensors::setSensorGeometry(const float xOffsets[NB_SENSORS], const float yOffsets[NB_SENSORS])
+{
+    for (int i = 0; i < NB_SENSORS; i++) {
+        sensorX[i] = xOffsets[i];
+        sensorY[i] = yOffsets[i];
+    }
+}
 
 void PID_5_Sensors::setThreshold(int index, float thresh, float ground)
 {
@@ -25,9 +39,9 @@ void PID_5_Sensors::setWhiteLine(bool white)
     whiteLine = white;
 }
 
-// ─────────────────────────────────────────────────────────
-//  LECTURE CAPTEURS
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
+//  SENSOR PROCESSING
+// ---------------------------------------------------------
 
 bool PID_5_Sensors::onLine(int index, float rawValue)
 {
@@ -36,21 +50,26 @@ bool PID_5_Sensors::onLine(int index, float rawValue)
                      : (rawValue <= threshold[index]);
 }
 
-// Correction Y : un capteur en retrait de dy voit ce que
-// le capteur central verra dans dt = dy / vLin.
-// Pendant dt, le robot pivote de omega*dt → décalage X corrigé.
+// Kinematic Y-axis correction:
+// A sensor offset longitudinally by dy observes the line slightly ahead/behind.
+// During the time dt = dy / vLin, the robot rotates by omega * dt.
+// This function compensates for the resulting lateral shift.
 float PID_5_Sensors::_correctedX(int index, float vLin, float omega)
 {
     float x  = sensorX[index];
-    float dy = sensorY[index] / 10.0f; // mm → cm
-    if (abs(vLin) > 2.0f)
+    float dy = sensorY[index] / 10.0f; // mm to cm
+    
+    // Avoid division by zero at very low speeds
+    if (abs(vLin) > 2.0f) {
         x += sensorX[index] * omega * dy / vLin;
+    }
     return x;
 }
 
-// Retourne la position centroïde (-2 à +2), NAN si ligne perdue.
-// rawValues[] : tensions des NB_SENSORS capteurs avant
-// vLin (cm/s) et omega (rad/s) depuis les encodeurs
+// Computes the weighted centroid position (range approximately -2.0 to +2.0)
+// Returns NAN if the line is completely lost.
+// rawValues[] : analog voltages of the NB_SENSORS
+// vLin (cm/s) and omega (rad/s) from encoders (optional, pass 0 if unknown)
 float PID_5_Sensors::centroid(float rawValues[NB_SENSORS], float vLin, float omega)
 {
     float sum = 0.0f, weights = 0.0f;
@@ -58,8 +77,11 @@ float PID_5_Sensors::centroid(float rawValues[NB_SENSORS], float vLin, float ome
 
     for (int i = 0; i < NB_SENSORS; i++) {
         if (!onLine(i, rawValues[i])) continue;
+        
         float w = abs(rawValues[i] - thresholdGround[i]);
         float x = _correctedX(i, vLin, omega);
+        
+        // Normalize by typical sensor spacing (14.0f)
         sum     += (x / 14.0f) * w;
         weights += w;
         n++;
@@ -67,9 +89,9 @@ float PID_5_Sensors::centroid(float rawValues[NB_SENSORS], float vLin, float ome
     return (n > 0) ? sum / weights : NAN;
 }
 
-// ─────────────────────────────────────────────────────────
-//  PID
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
+//  PID COMPUTATION
+// ---------------------------------------------------------
 
 void PID_5_Sensors::resetPID()
 {
@@ -78,19 +100,23 @@ void PID_5_Sensors::resetPID()
     _tPrev    = micros();
 }
 
-// Retourne la vitesse moteur gauche (appliquer directement)
+// Returns the left motor speed (ready to be applied to PWM)
 int PID_5_Sensors::computeLeft(float position, float dt)
 {
+    // Apply urgency gain if deviation is critical
     float kp      = (abs(position) >= 1.8f) ? KpUrgency : Kp;
+    
     _integral    += position * dt;
     _integral     = constrain(_integral, -50.0f, 50.0f);
+    
     float deriv   = (dt > 0) ? (position - _errPrev) / dt : 0.0f;
     _errPrev      = position;
+    
     float corr    = kp * position + Ki * _integral + Kd * deriv;
     return constrain((int)(baseSpeed + corr), -maxSpeed, maxSpeed);
 }
 
-// Retourne la vitesse moteur droit (appliquer directement)
+// Returns the right motor speed (ready to be applied to PWM)
 int PID_5_Sensors::computeRight(float position, float dt)
 {
     float kp      = (abs(position) >= 1.8f) ? KpUrgency : Kp;
@@ -98,9 +124,9 @@ int PID_5_Sensors::computeRight(float position, float dt)
     return constrain((int)(baseSpeed - corr), -maxSpeed, maxSpeed);
 }
 
-// ─────────────────────────────────────────────────────────
-//  DÉTECTION
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
+//  LINE DETECTION HELPERS
+// ---------------------------------------------------------
 
 bool PID_5_Sensors::isUrgencyRight(float rawValues[NB_SENSORS])
 {
@@ -124,7 +150,7 @@ bool PID_5_Sensors::isCrossing(float rawValues[NB_SENSORS])
     int n = 0;
     for (int i = 0; i < NB_SENSORS; i++)
         if (onLine(i, rawValues[i])) n++;
-    return (n >= 4);
+    return (n >= 4); // Intersection detected if 4 or 5 sensors see the line
 }
 
 bool PID_5_Sensors::isCenterDetected(float rawValues[NB_SENSORS])
