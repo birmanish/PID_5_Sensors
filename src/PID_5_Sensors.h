@@ -8,46 +8,46 @@
 
 class PID_5_Sensors {
 public:
+    // --- Physical sensor positions (mm from the array's center)
+    // X: lateral position | Y: longitudinal offset relative to the central sensor
+    // Order: [0]=Far Right ... [4]=Far Left
+    float sensorX[NB_SENSORS];
+    float sensorY[NB_SENSORS];
 
-    // ─── Positions physiques des capteurs (mm depuis centre)
-    //     X : position latérale  |  Y : recul par rapport au capteur central
-    //     Ordre : [0]=droit extrême ... [4]=gauche extrême
-    float sensorX[NB_SENSORS] = { -28.0f, -14.0f,  0.0f, 14.0f, 28.0f };
-    float sensorY[NB_SENSORS] = {  10.0f,   5.0f,  0.0f,  5.0f, 10.0f };
-
-    // ─── Seuils calibrés (à remplir depuis le code principal)
+    // --- Calibrated thresholds
     float threshold[NB_SENSORS];
     float thresholdGround[NB_SENSORS];
     bool  whiteLine = false;
 
-    // ─── PID
+    // --- PID Constants
     float Kp         = 30.0f;
     float Ki         =  0.0f;
     float Kd         = 10.0f;
     float KpUrgency  = 60.0f;
 
-    // ─── Vitesses
+    // --- Speed Constraints
     int   baseSpeed  = 55;
     int   maxSpeed   = 110;
 
-    // ─── Constructeur
+    // --- Constructor
     PID_5_Sensors();
 
-    // ─── Calibration
+    // --- Configuration & Calibration
+    void  setSensorGeometry(const float xOffsets[NB_SENSORS], const float yOffsets[NB_SENSORS]);
     void  setThreshold(int index, float thresh, float ground);
     void  setWhiteLine(bool white);
 
-    // ─── Lecture capteurs
-    //     rawValues[] : tableau de NB_SENSORS tensions lues depuis le code principal
+    // --- Sensor Processing
+    // rawValues[] : array of NB_SENSORS analog readings provided by the main sketch
     bool  onLine(int index, float rawValue);
     float centroid(float rawValues[NB_SENSORS], float vLin, float omega);
 
-    // ─── PID
+    // --- PID Computation
     void  resetPID();
     int   computeLeft(float position, float dt);
     int   computeRight(float position, float dt);
 
-    // ─── Détection
+    // --- Detection Helpers
     bool  isUrgencyLeft(float rawValues[NB_SENSORS]);
     bool  isUrgencyRight(float rawValues[NB_SENSORS]);
     bool  isLost(float rawValues[NB_SENSORS]);
